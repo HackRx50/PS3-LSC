@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify, send_file
+from flask import Flask, request, render_template, jsonify
 from tensorflow.keras.models import load_model
 import numpy as np
 import cv2
@@ -6,7 +6,7 @@ from PIL import Image, UnidentifiedImageError
 import io
 from lime import lime_image
 import pickle
-import matplotlib.pyplot as plt
+import base64
 
 app = Flask(__name__)
 
@@ -72,23 +72,31 @@ def generate_lime_explanation(image_bytes):
     # Find contours of highlighted regions
     contours, _ = cv2.findContours(upsampled_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    regions = [{"contour": [{"x": int(pt[0][0]), "y": int(pt[0][1])} for pt in contour]} for contour in contours]
+    return contours, original_size
 
-    return regions, contours, original_size
-
-# Function to overlay shaded contours
+# Function to overlay shaded contours on the image
+# Function to overlay shaded contours with transparency
 def overlay_contours_on_image(image_bytes, contours, original_size):
     img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
     img_resized = cv2.resize(img, original_size)
 
+    # Create a copy of the image to overlay contours on
+    overlay = img_resized.copy()
+
+    # Draw the contours on the overlay image
     for contour in contours:
-        cv2.fillPoly(img_resized, [contour], color=(0, 255, 0))  # Green fill
+        cv2.fillPoly(overlay, [contour], color=(0, 255, 0))  # Green fill for contours
 
-    alpha = 0.4  # Transparency factor
-    shaded_img = cv2.addWeighted(img_resized, alpha, img_resized, 1 - alpha, 0)
+    # Set the transparency level (adjust alpha as needed)
+    alpha = 0.3  
 
-    _, buffer = cv2.imencode('.png', shaded_img)  # Encode the shaded image as PNG
+    # Combine the original image with the overlay image
+    shaded_img = cv2.addWeighted(overlay, alpha, img_resized, 1 - alpha, 0)
+
+    # Encode the shaded image as PNG
+    _, buffer = cv2.imencode('.png', shaded_img)
     return io.BytesIO(buffer)
+
 
 # Route for homepage
 @app.route('/')
@@ -96,12 +104,6 @@ def index():
     return render_template('index.html')
 
 # Route for prediction
-import base64
-import io
-import json
-import os
-from PIL import Image
-
 @app.route('/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
@@ -136,64 +138,26 @@ def predict():
         # Proceed with LIME explanation
         file.seek(0)  # Reset file pointer again for LIME
         image_bytes = file.read()
-        img_for_lime, original_size = preprocess_image_for_lime(image_bytes)
+        
+        # Generate LIME explanation
+        contours, original_size = generate_lime_explanation(image_bytes)
 
-        if img_for_lime is None:
+        if contours is None:
             return jsonify({"error": "Could not process image for LIME"}), 400
 
-        # Generate LIME explanation
-        explainer = lime_image.LimeImageExplainer()
-        explanation = explainer.explain_instance(
-            img_for_lime[0],
-            lambda images: np.column_stack((model1.predict(images), model2.predict(images))),
-            top_labels=2,
-            hide_color=0,
-            num_samples=1000
-        )
+        # Overlay contours on the original image
+        shaded_image_stream = overlay_contours_on_image(image_bytes, contours, original_size)
 
-        # Get the top predicted label dynamically
-        label_to_explain = explanation.top_labels[0]
-
-        # Get the mask from LIME
-        _, mask = explanation.get_image_and_mask(
-            label=label_to_explain,
-            positive_only=True,
-            num_features=5,
-            hide_rest=True
-        )
-
-        # Upsample mask to original image size
-        upsampled_mask = cv2.resize(mask.astype(np.uint8), original_size, interpolation=cv2.INTER_NEAREST)
-
-        # Find contours of the highlighted regions in the mask
-        contours, _ = cv2.findContours(upsampled_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Extract full coordinates of each contour
-        regions = []
-        for contour in contours:
-            contour_points = [{"x": int(point[0][0]), "y": int(point[0][1])} for point in contour]
-            regions.append({"contour": contour_points})
+        # Convert the shaded image to base64 for display
+        shaded_image_base64 = base64.b64encode(shaded_image_stream.getvalue()).decode('utf-8')
 
         # Prepare the result with predictions and LIME explanation
         result = {
             "is_forged": is_forged,
             "confidence": confidence,
-            "lime_explanation": regions
+            "shaded_image": f"data:image/png;base64,{shaded_image_base64}"  # Include the image with contours
         }
 
-        # Convert processed_image back to base64 for display
-        buffered = io.BytesIO()
-        img.save(buffered, format="JPEG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
-        # Add the base64 image to the result
-        result["image"] = f"data:image/jpeg;base64,{img_base64}"
-
-        # Save the result to a local JSON file
-        with open('prediction_result.json', 'w') as json_file:
-            json.dump(result, json_file, indent=4)
-
-        # Return the result as JSON
         return jsonify(result)
 
     return jsonify({"error": "Invalid file"}), 400

@@ -2,15 +2,48 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document Forgery Detection</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
-    <h1>Upload Document Image</h1>
-    <form action="/predict" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" accept="image/*" required>
-        <input type="submit" value="Upload and Predict">
+    <h1>Upload Image for Forgery Detection</h1>
+    <form id="upload-form">
+        <input type="file" name="file" id="file" accept="image/*" required>
+        <button type="submit">Upload</button>
     </form>
+
+    <div id="result" style="display:none;">
+        <h2>Prediction Result:</h2>
+        <p id="is_forged"></p>
+        <p id="confidence"></p>
+        <img id="result_image" src="" alt="Processed Image">
+        <div id="lime_explanation"></div>
+    </div>
+
+    <script>
+        $('#upload-form').on('submit', function(event) {
+            event.preventDefault(); // Prevent the form from submitting the traditional way
+            var formData = new FormData(this);
+            $.ajax({
+                url: '/predict',
+                type: 'POST',
+                data: formData,
+                contentType: false,
+                processData: false,
+                success: function(response) {
+                    // Display results
+                    $('#is_forged').text('Is Forged: ' + response.is_forged);
+                    $('#confidence').text('Confidence: ' + response.confidence.toFixed(2) + '%');
+                    $('#result_image').attr('src', response.shaded_image);  // Display the image with contours
+                    $('#result').show();
+                },
+                error: function(xhr) {
+                    alert('Error: ' + xhr.responseJSON.error);
+                }
+            });
+        });
+    </script>
+    
 </body>
 </html>
