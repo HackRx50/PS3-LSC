@@ -1,3 +1,6 @@
 Data
 .ipynb_checkpoints
 dataset-doctor-bills
+Document Forgery detection.v48i.multiclass
+forgery_detection_model.h5
+.venv
